@@ -1,0 +1,75 @@
+name: Update TEZ dashboard
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-tez-dashboard
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SHIPOX_USERNAME: ${{ secrets.SHIPOX_USERNAME }}
+      SHIPOX_PASSWORD: ${{ secrets.SHIPOX_PASSWORD }}
+      SHIPOX_ID_TOKEN: ${{ secrets.SHIPOX_ID_TOKEN }}
+      SHIPOX_CUSTOMER_ID: ${{ secrets.SHIPOX_CUSTOMER_ID }}
+      SHIPOX_CONCURRENCY: "3"
+      SHIPOX_REQUEST_TIMEOUT_MS: "120000"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Check Shipox access
+        shell: bash
+        run: |
+          if [[ -z "$SHIPOX_ID_TOKEN" && ( -z "$SHIPOX_USERNAME" || -z "$SHIPOX_PASSWORD" ) ]]; then
+            echo "Add SHIPOX_USERNAME and SHIPOX_PASSWORD, or SHIPOX_ID_TOKEN, in repository secrets."
+            exit 1
+          fi
+          if [[ -z "$SHIPOX_CUSTOMER_ID" ]]; then
+            echo "Add SHIPOX_CUSTOMER_ID in repository secrets."
+            exit 1
+          fi
+
+      - name: Export Shipox orders
+        shell: bash
+        run: |
+          FROM_DATE="$(TZ=Asia/Tashkent date -d '70 days ago' '+%Y-%m-%d 00:00')"
+          echo "Exporting TEZ orders from $FROM_DATE"
+          node tools/shipox_export_orders.mjs \
+            --customer-id "$SHIPOX_CUSTOMER_ID" \
+            --from "$FROM_DATE" \
+            --out shipox_order_export_prod_api_fast.csv \
+            --result-file shipox_order_export_prod_api_fast_result.json \
+            --concurrency 3 \
+            --head-refresh-pages 3 \
+            --request-timeout-ms 120000
+
+      - name: Build snapshot
+        run: node build_tez_snapshot.mjs
+
+      - name: Commit snapshot
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add snapshot.js
+          if git diff --cached --quiet; then
+            echo "No dashboard data changes."
+          else
+            git commit -m "Update TEZ dashboard data"
+            git push
+          fi

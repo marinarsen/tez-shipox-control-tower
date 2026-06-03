@@ -127,8 +127,7 @@ h2 {
 }
 
 .meta span,
-.range-note,
-.risk {
+.range-note {
   padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -197,7 +196,7 @@ h2 {
   border-top-color: var(--yellow);
 }
 
-.metric.risk {
+.metric.alert {
   border-top-color: var(--orange);
 }
 
@@ -278,6 +277,31 @@ h2 {
   box-shadow: 0 1px 4px rgba(23, 33, 43, 0.08);
 }
 
+.quick-buttons {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.quick-buttons button {
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.quick-buttons button:hover {
+  background: #ffffff;
+  color: var(--ink);
+}
+
 .table-shell {
   overflow: auto;
 }
@@ -295,6 +319,15 @@ h2 {
   text-align: left;
   white-space: nowrap;
   font-size: 13px;
+  vertical-align: top;
+}
+
+.table td small,
+.detail-grid small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .table th {
@@ -314,36 +347,20 @@ h2 {
   background: #eef7ff;
 }
 
-.risk {
-  display: inline-flex;
-  min-width: 72px;
-  justify-content: center;
-  font-size: 11px;
+.delta {
   font-weight: 800;
 }
 
-.risk-ok {
+.delta.good {
   color: #117247;
-  border-color: #b8e4ca;
-  background: #e9f8f0;
 }
 
-.risk-watch {
-  color: #7a5a0a;
-  border-color: #ead99a;
-  background: #fff6dc;
-}
-
-.risk-risk {
+.delta.bad {
   color: #a24913;
-  border-color: #ecc39d;
-  background: #fff0e2;
 }
 
-.risk-critical {
-  color: #a12222;
-  border-color: #efb2b2;
-  background: #ffeaea;
+.delta.flat {
+  color: var(--muted);
 }
 
 .bars,
@@ -393,7 +410,8 @@ h2 {
 
 .badge-line span,
 .status-list div,
-.formula-list div {
+.formula-list div,
+.empty {
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -548,6 +566,10 @@ h2 {
 
   .range-note {
     margin-left: 0;
+  }
+
+  .quick-buttons {
+    flex-wrap: wrap;
   }
 
   .timeline-row,

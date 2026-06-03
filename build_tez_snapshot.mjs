@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const sourceRoot = "C:/Users/HP/Documents/Codex/workspace/tezbank-dashboard";
-const sourceCsv = path.join(sourceRoot, "shipox_order_export_prod_api_fast.csv");
-const sourceResult = path.join(sourceRoot, "shipox_order_export_prod_api_fast_result.json");
-const outFile = path.join(process.cwd(), "snapshot.js");
+const sourceCsv = process.env.TEZ_SOURCE_CSV || path.join(process.cwd(), "shipox_order_export_prod_api_fast.csv");
+const sourceResult = process.env.TEZ_SOURCE_RESULT || path.join(process.cwd(), "shipox_order_export_prod_api_fast_result.json");
+const outFile = process.env.TEZ_SNAPSHOT_OUT || path.join(process.cwd(), "snapshot.js");
 
 const FINAL_STATUSES = new Set(["Order Completed", "Order Cancelled", "Returned to origin"]);
 const CLIENT_ISSUE_STATUSES = new Set([
@@ -17,6 +16,8 @@ const CLIENT_ISSUE_STATUSES = new Set([
   "Future delivery requested",
   "Unable to access recipient premises",
   "Delivery rejected",
+  "Out of delivery area",
+  "Delivery attempt",
   "cancelled_due_to_out_of_delivery_area",
   "delivery_attempt",
 ]);
@@ -86,17 +87,20 @@ function parseCsv(text) {
 function parseDate(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
-  const d = new Date(raw.replace(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})/, "$1 $2 $3"));
+  const normalized = raw.replace(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})/, "$1 $2 $3");
+  const d = new Date(normalized);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function dateKey(date) {
+function iso(date) {
   return date ? date.toISOString().slice(0, 10) : "";
 }
 
 function dayDiff(from, to) {
   if (!from || !to) return null;
-  return Math.max(0, Math.round((Date.UTC(to.getFullYear(), to.getMonth(), to.getDate()) - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / 86400000));
+  const a = Date.UTC(from.getFullYear(), from.getMonth(), from.getDate());
+  const b = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate());
+  return Math.max(0, Math.round((b - a) / 86400000));
 }
 
 function normalizeWarehouse(value) {
@@ -124,50 +128,45 @@ function maskOrderId(value) {
   return `${id.slice(0, Math.max(3, id.length - 3))}***`;
 }
 
-function emptyWarehouse(name) {
-  return {
-    warehouse: name,
-    total: 0,
-    active: 0,
-    delivered: 0,
-    returned: 0,
-    cancelled: 0,
-    clientIssue: 0,
-    failed: 0,
-    over3d: 0,
-    over7d: 0,
-    noFirstAttempt3d: 0,
-    dtSum: 0,
-    dtCount: 0,
-    faSum: 0,
-    faCount: 0,
-    created7d: 0,
-    delivered7d: 0,
-    statuses: {},
-  };
+function readSourceResult() {
+  if (!fs.existsSync(sourceResult)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(sourceResult, "utf8"));
+  } catch {
+    return {};
+  }
 }
 
-function add(map, key, patch = {}) {
-  if (!map.has(key)) map.set(key, { key, ...patch });
-  return map.get(key);
+if (!fs.existsSync(sourceCsv)) {
+  throw new Error(`Source CSV not found: ${sourceCsv}`);
 }
 
 const rows = parseCsv(fs.readFileSync(sourceCsv, "utf8"));
-const headers = rows.shift();
+const headers = rows.shift() || [];
 const idx = Object.fromEntries(headers.map((h, i) => [h, i]));
-const exportResult = fs.existsSync(sourceResult) ? JSON.parse(fs.readFileSync(sourceResult, "utf8")) : {};
-const now = new Date();
+for (const required of [
+  "Номер заказа",
+  "Текущий статус",
+  "Дата создания",
+  "Дата последнего обновления статуса",
+  "Название склада",
+]) {
+  if (!(required in idx)) throw new Error(`Missing CSV column: ${required}`);
+}
+
+const exportedAt = new Date();
+const sourceExport = readSourceResult();
 const orders = [];
-const warehouses = new Map();
-const daily = new Map();
-const statuses = new Map();
+const warehouseSet = new Set();
+let minDate = "";
+let maxDate = "";
 
 for (const row of rows) {
-  const id = row[idx["Номер заказа"]];
-  const status = row[idx["Текущий статус"]] || "Unknown";
   const createdAt = parseDate(row[idx["Дата создания"]]);
+  if (!createdAt) continue;
   const updatedAt = parseDate(row[idx["Дата последнего обновления статуса"]]);
   const firstAttemptAt = parseDate(row[idx["Первая попытка доставки"]]);
+  const status = row[idx["Текущий статус"]] || "Unknown";
   const rawWarehouse = row[idx["Название склада"]] || row[idx["Название склада отправления"]];
   const warehouse = normalizeWarehouse(rawWarehouse);
   const isFinal = FINAL_STATUSES.has(status);
@@ -175,132 +174,49 @@ for (const row of rows) {
   const isReturned = status === "Returned to origin";
   const isCancelled = status === "Order Cancelled";
   const isClientIssue = CLIENT_ISSUE_STATUSES.has(status);
-  const ageDays = dayDiff(createdAt, now);
-  const dtDays = isDelivered ? dayDiff(createdAt, updatedAt) : null;
-  const firstAttemptDays = firstAttemptAt ? dayDiff(createdAt, firstAttemptAt) : null;
-  const bucket = statusBucket(status);
+  const createdDate = iso(createdAt);
+  const updatedDate = iso(updatedAt);
+  const firstAttemptDate = iso(firstAttemptAt);
+  const ageDays = dayDiff(createdAt, exportedAt);
 
-  const order = {
-    id: maskOrderId(id),
+  if (!minDate || createdDate < minDate) minDate = createdDate;
+  if (!maxDate || createdDate > maxDate) maxDate = createdDate;
+  warehouseSet.add(warehouse);
+
+  orders.push({
+    id: maskOrderId(row[idx["Номер заказа"]]),
     status,
-    bucket,
+    bucket: statusBucket(status),
     warehouse,
-    rawWarehouse,
-    createdAt: createdAt?.toISOString() || "",
-    updatedAt: updatedAt?.toISOString() || "",
-    firstAttemptAt: firstAttemptAt?.toISOString() || "",
+    createdDate,
+    updatedDate,
+    firstAttemptDate,
     ageDays,
-    dtDays,
-    firstAttemptDays,
+    dtDays: isDelivered ? dayDiff(createdAt, updatedAt) : null,
+    firstAttemptDays: firstAttemptAt ? dayDiff(createdAt, firstAttemptAt) : null,
     isFinal,
     isDelivered,
     isReturned,
     isCancelled,
     isClientIssue,
-  };
-  orders.push(order);
-
-  const wh = warehouses.get(warehouse) || emptyWarehouse(warehouse);
-  wh.total++;
-  wh.active += isFinal ? 0 : 1;
-  wh.delivered += isDelivered ? 1 : 0;
-  wh.returned += isReturned ? 1 : 0;
-  wh.cancelled += isCancelled ? 1 : 0;
-  wh.clientIssue += isClientIssue && !isFinal ? 1 : 0;
-  wh.failed += bucket === "failed" ? 1 : 0;
-  wh.over3d += !isFinal && ageDays > 3 ? 1 : 0;
-  wh.over7d += !isFinal && ageDays > 7 ? 1 : 0;
-  wh.noFirstAttempt3d += !isFinal && !firstAttemptAt && ageDays > 3 ? 1 : 0;
-  if (dtDays != null) {
-    wh.dtSum += dtDays;
-    wh.dtCount++;
-  }
-  if (firstAttemptDays != null) {
-    wh.faSum += firstAttemptDays;
-    wh.faCount++;
-  }
-  const createdKey = dateKey(createdAt);
-  if (createdKey >= dateKey(new Date(now.getTime() - 7 * 86400000))) wh.created7d++;
-  if (isDelivered && dateKey(updatedAt) >= dateKey(new Date(now.getTime() - 7 * 86400000))) wh.delivered7d++;
-  wh.statuses[status] = (wh.statuses[status] || 0) + 1;
-  warehouses.set(warehouse, wh);
-
-  const statusRow = add(statuses, status, { status, bucket, count: 0, active: 0, avgAgeSum: 0 });
-  statusRow.count++;
-  if (!isFinal) {
-    statusRow.active++;
-    statusRow.avgAgeSum += ageDays || 0;
-  }
-
-  if (createdAt) {
-    const d = add(daily, createdKey, { date: createdKey, created: 0, delivered: 0, returned: 0, cancelled: 0, activeDelta: 0 });
-    d.created++;
-    d.activeDelta++;
-  }
-  if (isDelivered || isReturned || isCancelled) {
-    const d = add(daily, dateKey(updatedAt), { date: dateKey(updatedAt), created: 0, delivered: 0, returned: 0, cancelled: 0, activeDelta: 0 });
-    if (isDelivered) d.delivered++;
-    if (isReturned) d.returned++;
-    if (isCancelled) d.cancelled++;
-    d.activeDelta--;
-  }
+  });
 }
 
 const warehouseRank = new Map(WAREHOUSE_ORDER.map((w, i) => [w, i]));
-const warehouseRows = [...warehouses.values()]
-  .map((w) => ({
-    ...w,
-    avgDt: w.dtCount ? w.dtSum / w.dtCount : 0,
-    avgFirstAttempt: w.faCount ? w.faSum / w.faCount : 0,
-    risk: w.noFirstAttempt3d > 80 || w.over7d > 80 ? "critical" : w.noFirstAttempt3d > 25 || w.over3d > 120 ? "risk" : w.active > 200 || w.clientIssue > 20 ? "watch" : "ok",
-  }))
-  .sort((a, b) => (warehouseRank.get(a.warehouse) ?? 999) - (warehouseRank.get(b.warehouse) ?? 999) || b.total - a.total);
-
-const dailyRows = [...daily.values()].sort((a, b) => a.date.localeCompare(b.date));
-let runningActive = 0;
-for (const d of dailyRows) {
-  runningActive += d.activeDelta;
-  d.activeEod = runningActive;
-}
-
-const delivered = orders.filter((o) => o.isDelivered);
-const active = orders.filter((o) => !o.isFinal);
-const returned = orders.filter((o) => o.isReturned);
-const cancelled = orders.filter((o) => o.isCancelled);
-const avg = (arr, fn) => (arr.length ? arr.reduce((s, x) => s + (fn(x) || 0), 0) / arr.length : 0);
-const within3 = delivered.filter((o) => o.dtDays != null && o.dtDays <= 3).length;
+const warehouses = [...warehouseSet].sort((a, b) => {
+  const ai = warehouseRank.get(a) ?? 999;
+  const bi = warehouseRank.get(b) ?? 999;
+  return ai - bi || a.localeCompare(b);
+});
 
 const snapshot = {
-  generatedAt: new Date().toISOString(),
+  generatedAt: exportedAt.toISOString(),
   sourceCsv: path.basename(sourceCsv),
-  sourceExport: exportResult,
-  kpis: {
-    total: orders.length,
-    active: active.length,
-    delivered: delivered.length,
-    returned: returned.length,
-    cancelled: cancelled.length,
-    clientIssue: active.filter((o) => o.isClientIssue).length,
-    over3d: active.filter((o) => o.ageDays > 3).length,
-    over7d: active.filter((o) => o.ageDays > 7).length,
-    noFirstAttempt3d: active.filter((o) => !o.firstAttemptAt && o.ageDays > 3).length,
-    avgDt: avg(delivered, (o) => o.dtDays),
-    avgFirstAttempt: avg(orders.filter((o) => o.firstAttemptDays != null), (o) => o.firstAttemptDays),
-    within3Pct: delivered.length ? (within3 / delivered.length) * 100 : 0,
-  },
-  warehouses: warehouseRows,
-  statuses: [...statuses.values()]
-    .map((s) => ({ ...s, avgActiveAge: s.active ? s.avgAgeSum / s.active : 0 }))
-    .sort((a, b) => b.count - a.count),
-  daily: dailyRows,
-  orders: orders
-    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
-    .slice(0, 500),
-  tails: active
-    .filter((o) => o.ageDays > 7)
-    .sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))
-    .slice(0, 120),
+  sourceExport,
+  availableRange: { from: minDate, to: maxDate },
+  warehouses,
+  orders: orders.sort((a, b) => b.createdDate.localeCompare(a.createdDate)),
 };
 
-fs.writeFileSync(outFile, `window.TEZ_SNAPSHOT = ${JSON.stringify(snapshot, null, 2)};\n`, "utf8");
-console.log(`Wrote ${outFile} from ${orders.length} orders`);
+fs.writeFileSync(outFile, `window.TEZ_SNAPSHOT = ${JSON.stringify(snapshot)};\n`, "utf8");
+console.log(`Wrote ${outFile} from ${orders.length} orders (${minDate}..${maxDate})`);
