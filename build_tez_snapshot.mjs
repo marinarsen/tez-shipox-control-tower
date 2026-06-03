@@ -131,7 +131,16 @@ function maskOrderId(value) {
 function readSourceResult() {
   if (!fs.existsSync(sourceResult)) return {};
   try {
-    return JSON.parse(fs.readFileSync(sourceResult, "utf8"));
+    const raw = JSON.parse(fs.readFileSync(sourceResult, "utf8"));
+    return {
+      ts: raw.ts,
+      source: raw.source,
+      fromDateTime: raw.fromDateTime,
+      pagesFetched: raw.pagesFetched,
+      totalReported: raw.totalReported,
+      rowsWritten: raw.rowsWritten,
+      statusCounts: raw.statusCounts || {},
+    };
   } catch {
     return {};
   }
