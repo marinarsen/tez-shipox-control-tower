@@ -127,11 +127,24 @@ h2 {
 }
 
 .meta span,
+.meta a,
 .range-note {
   padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--soft);
+}
+
+.meta a {
+  color: #0d6c48;
+  border-color: #b9d9c7;
+  background: #edf9f2;
+  text-decoration: none;
+  font-weight: 800;
+}
+
+.meta a:hover {
+  background: #dff4e8;
 }
 
 .filters {

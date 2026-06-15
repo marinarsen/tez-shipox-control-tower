@@ -11,6 +11,7 @@ const bucketLabels = {
 };
 
 const colors = ["#127a5a", "#226fb2", "#d8a21e", "#d66a2f", "#cf3f3f", "#6c5aa8"];
+const UPDATE_WORKFLOW_URL = "https://github.com/marinarsen/tez-shipox-control-tower/actions/workflows/update-tez-dashboard.yml";
 const fmt = new Intl.NumberFormat("ru-RU");
 const fmt1 = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 });
 
@@ -308,7 +309,7 @@ function controls(compare) {
   return `<section class="command">
     <div class="topbar">
       <div class="brand"><div class="brand-mark">TEZ</div><div><h1>TEZ / Shipox Control Tower</h1><p>Рабочая интернет-версия TEZ dashboard: даты, сравнения, склады, статусы и хвосты 7+.</p></div></div>
-      <div class="meta"><span>PROD</span><span>${snapshot.sourceCsv}</span><span>обновлено ${rangeLabel(snapshot.generatedAt.slice(0, 10), snapshot.generatedAt.slice(0, 10))}</span></div>
+      <div class="meta"><span>PROD</span><a class="refresh-action" href="${UPDATE_WORKFLOW_URL}" target="_blank" rel="noreferrer">Обновить</a><span>${snapshot.sourceCsv}</span><span>обновлено ${rangeLabel(snapshot.generatedAt.slice(0, 10), snapshot.generatedAt.slice(0, 10))}</span></div>
     </div>
     <div class="filters">
       <label><span>С даты</span><input id="dateFrom" type="date" min="${snapshot.availableRange.from}" max="${snapshot.availableRange.to}" value="${state.dateFrom}" /></label>
